@@ -61,6 +61,9 @@ test('resize keeps aspect', async ({ page }) => {
 
 test('real-time loop advances simulated time at about wall-clock speed', async ({ page }) => {
   await startGame(page);
+  // Small viewport keeps software-rendered CI above the 10 fps floor of the fixed step.
+  await page.setViewportSize({ width: 320, height: 180 });
+  await waitForFrames(page, 3);
   const start = await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.elapsed);
   await page.waitForTimeout(1000);
   const gained = (await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.elapsed)) - start;

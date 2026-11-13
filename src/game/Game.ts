@@ -4,15 +4,19 @@ import type { GameEvents } from '../core/events';
 import { FixedStep } from '../core/FixedStep';
 import { Loop } from '../core/Loop';
 import { createRenderer, resizeRenderer } from '../core/Renderer';
+import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { DebugTools, type DebugTuning } from '../systems/DebugTools';
 import { Screens } from '../ui/screens';
 import { createSeededRandom } from '../utils/random';
+import { DARKNESS, setupLighting } from '../world/lighting';
+import { buildRoom } from '../world/RoomBuilder';
+import { ROOM } from '../world/roomDefinition';
 import type { GameDiagnostics, GameState, TestState } from './diagnostics';
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(65, 1, 0.05, 60);
+  readonly scene = new THREE.Scene();
+  readonly camera = new THREE.PerspectiveCamera(65, 1, 0.05, 60);
   private readonly loop = new Loop(
     (delta) => this.update(delta),
     () => this.render(),
@@ -21,7 +25,14 @@ export class Game {
   private readonly fixedStep = new FixedStep((dt) => this.simulate(dt));
   private readonly screens: Screens;
   private readonly debugTools: DebugTools;
-  private readonly tuning: DebugTuning = { exposure: 1.0, maxDpr: 2 };
+  private readonly tuning: DebugTuning = {
+    exposure: 1.0,
+    maxDpr: 2,
+    ambient: DARKNESS.ambientIntensity,
+    fogDensity: DARKNESS.fogDensity,
+  };
+  private readonly room: { dispose(): void };
+  private readonly lights: ReturnType<typeof setupLighting>;
 
   private state: GameState = 'title';
   private frame = 0;
@@ -35,15 +46,31 @@ export class Game {
     if (event.code === 'Escape' && this.state === 'playing') this.setState('paused');
   };
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  /** Physics needs an async WebAssembly init, so the game is built through this factory. */
+  static async create(canvas: HTMLCanvasElement): Promise<Game> {
+    return new Game(canvas, await PhysicsWorld.create());
+  }
+
+  private constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly physics: PhysicsWorld,
+  ) {
     this.renderer = createRenderer(canvas);
     this.renderer.toneMappingExposure = this.tuning.exposure;
-    this.scene.background = new THREE.Color(0x000000);
+    this.lights = setupLighting(this.scene);
+    this.room = buildRoom(ROOM, this.scene, this.physics);
+
+    // Fixed view from the spawn point until the player controller arrives (task 4).
+    const spawn = ROOM.spawn.position;
+    this.camera.position.set(spawn.x, 1.62, spawn.z);
+    this.camera.lookAt(spawn.x + 1, 1.62, spawn.z);
 
     const host = canvas.parentElement ?? document.body;
     this.screens = new Screens(host, () => this.setState('playing'));
     this.debugTools = new DebugTools(this.tuning, () => {
       this.renderer.toneMappingExposure = this.tuning.exposure;
+      this.lights.ambient.intensity = this.tuning.ambient;
+      this.lights.fog.density = this.tuning.fogDensity;
       resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
     });
 
@@ -67,6 +94,8 @@ export class Game {
     this.loop.stop();
     window.removeEventListener('keydown', this.onKeyDown);
     this.debugTools.dispose();
+    this.room.dispose();
+    this.physics.dispose();
     this.renderer.dispose();
     window.__THREE_GAME_DIAGNOSTICS__ = undefined;
     window.__THREE_GAME_TEST_HOOKS__ = undefined;
@@ -90,6 +119,7 @@ export class Game {
   /** One fixed 60 Hz simulation step. */
   private simulate(dt: number): void {
     this.elapsed += dt;
+    this.physics.step(dt);
   }
 
   private render(): void {
