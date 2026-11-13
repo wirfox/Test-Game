@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { bindAudio } from '../audio/audioBindings';
+import { AudioEngine } from '../audio/AudioEngine';
 import { EventBus } from '../core/EventBus';
 import type { GameEvents, Vec3 } from '../core/events';
 import { FIXED_DT, FixedStep } from '../core/FixedStep';
@@ -45,6 +47,8 @@ export class Game {
   private readonly flashlight: Flashlight;
   private readonly fuseBox: FuseBox;
   private readonly interaction: Interaction;
+  private readonly audio = new AudioEngine();
+  private readonly unbindAudio: () => void;
   private readonly screens: Screens;
   private readonly hud: Hud;
   private readonly debugTools: DebugTools;
@@ -98,6 +102,8 @@ export class Game {
     this.fuseBox = new FuseBox(this.scene, ROOM.fuseBox, this.bus);
     this.interaction = new Interaction([this.fuseBox.interactable], (from, to) => this.hasLineOfSight(from, to));
     this.flashlight.update(0, 0);
+    // Sound variation has its own generator so it can never disturb gameplay randomness.
+    this.unbindAudio = bindAudio(this.bus, this.audio, createSeededRandom(99));
 
     const host = canvas.parentElement ?? document.body;
     this.hud = new Hud(host);
@@ -131,6 +137,8 @@ export class Game {
     this.input.dispose();
     this.hud.dispose();
     this.debugTools.dispose();
+    this.unbindAudio();
+    this.audio.dispose();
     this.flashlight.dispose();
     this.fuseBox.dispose();
     this.player.dispose();
@@ -164,6 +172,9 @@ export class Game {
     this.intent = IDLE_INTENT;
     this.screens.show(next);
     if (next !== 'playing') this.hud.showPrompt(null);
+    // Called synchronously from the click, which is what lets the browser start audio.
+    if (next === 'playing') void this.audio.resume().then(() => this.audio.startAmbience());
+    if (next === 'paused') this.audio.suspend();
     // Menus need the cursor: a locked pointer would send their clicks to the canvas.
     if (next !== 'playing') this.input.releaseLock();
     if (next === 'playing' && !this.helpShown) {
@@ -189,6 +200,7 @@ export class Game {
     this.handleInput(intent);
     this.player.interpolate(this.fixedStep.advance(delta));
     this.flashlight.update(delta, this.elapsed);
+    this.audio.setListener(this.player.eyePosition, this.player.yaw);
   }
 
   /** Per-frame input: looking, one-shot key presses, and the interaction prompt. */
@@ -288,7 +300,7 @@ export class Game {
       flashlight: { on: this.flashlight.on, flickering: this.flashlight.flickering },
       objective: { powerOn: this.fuseBox.powerOn },
       haunt: { phase: 'calm', counts: {}, apparitionVisible: false },
-      audio: { contextState: 'none', played: {} },
+      audio: { contextState: this.audio.contextState, played: { ...this.audio.played } },
       renderer: {
         calls: info.render.calls,
         triangles: info.render.triangles,
