@@ -1,17 +1,20 @@
 import * as THREE from 'three';
 import { EventBus } from '../core/EventBus';
-import type { GameEvents } from '../core/events';
+import type { GameEvents, Vec3 } from '../core/events';
 import { FIXED_DT, FixedStep } from '../core/FixedStep';
 import { InputController, type InputIntent } from '../core/InputController';
 import { Loop } from '../core/Loop';
 import { createRenderer, resizeRenderer } from '../core/Renderer';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
+import { Flashlight } from '../player/Flashlight';
+import { Interaction } from '../player/Interaction';
 import { PlayerController } from '../player/PlayerController';
 import { DebugTools, type DebugTuning } from '../systems/DebugTools';
 import { Hud } from '../ui/Hud';
 import { detectMovementKeyLabels } from '../ui/keyLabels';
 import { Screens } from '../ui/screens';
 import { createSeededRandom } from '../utils/random';
+import { FuseBox } from '../world/FuseBox';
 import { DARKNESS, setupLighting } from '../world/lighting';
 import { buildRoom } from '../world/RoomBuilder';
 import { ROOM } from '../world/roomDefinition';
@@ -39,6 +42,9 @@ export class Game {
   private readonly fixedStep = new FixedStep((dt) => this.simulate(dt));
   private readonly input: InputController;
   private readonly player: PlayerController;
+  private readonly flashlight: Flashlight;
+  private readonly fuseBox: FuseBox;
+  private readonly interaction: Interaction;
   private readonly screens: Screens;
   private readonly hud: Hud;
   private readonly debugTools: DebugTools;
@@ -88,6 +94,11 @@ export class Game {
     this.player = new PlayerController(this.physics, this.camera, this.bus);
     this.player.teleport(ROOM.spawn.position.x, ROOM.spawn.position.z, ROOM.spawn.yaw);
 
+    this.flashlight = new Flashlight(this.camera, this.scene, this.bus);
+    this.fuseBox = new FuseBox(this.scene, ROOM.fuseBox, this.bus);
+    this.interaction = new Interaction([this.fuseBox.interactable], (from, to) => this.hasLineOfSight(from, to));
+    this.flashlight.update(0, 0);
+
     const host = canvas.parentElement ?? document.body;
     this.hud = new Hud(host);
     this.screens = new Screens(host, (state) => void this.onScreenClicked(state));
@@ -120,6 +131,8 @@ export class Game {
     this.input.dispose();
     this.hud.dispose();
     this.debugTools.dispose();
+    this.flashlight.dispose();
+    this.fuseBox.dispose();
     this.player.dispose();
     this.room.dispose();
     this.physics.dispose();
@@ -150,6 +163,7 @@ export class Game {
     this.input.releaseAll();
     this.intent = IDLE_INTENT;
     this.screens.show(next);
+    if (next !== 'playing') this.hud.showPrompt(null);
     // Menus need the cursor: a locked pointer would send their clicks to the canvas.
     if (next !== 'playing') this.input.releaseLock();
     if (next === 'playing' && !this.helpShown) {
@@ -172,9 +186,32 @@ export class Game {
   private runFrame(delta: number): void {
     const intent = this.input.consume();
     if (this.state !== 'playing' || this.pausedForScreenshot) return;
+    this.handleInput(intent);
+    this.player.interpolate(this.fixedStep.advance(delta));
+    this.flashlight.update(delta, this.elapsed);
+  }
+
+  /** Per-frame input: looking, one-shot key presses, and the interaction prompt. */
+  private handleInput(intent: InputIntent): void {
     this.intent = intent;
     this.player.applyLook(intent.lookDX, intent.lookDY);
-    this.player.interpolate(this.fixedStep.advance(delta));
+    if (intent.flashlightPressed) this.flashlight.toggle();
+    const focused = this.interaction.update(
+      this.player.eyePosition,
+      this.player.yaw,
+      this.player.pitch,
+      intent.interactPressed,
+    );
+    // Activating can disable the target, so ask again before showing its prompt.
+    this.hud.showPrompt(focused?.enabled() ? focused.prompt : null);
+  }
+
+  /** True when no level geometry stands between the two points. */
+  private hasLineOfSight(from: Vec3, to: Vec3): boolean {
+    const dir = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
+    const distance = Math.hypot(dir.x, dir.y, dir.z);
+    const hit = this.physics.castRay(from, dir, distance);
+    return !hit || hit.distance >= distance - 0.06;
   }
 
   /** One fixed 60 Hz simulation step. */
@@ -213,10 +250,10 @@ export class Game {
       },
       hideDebugUi: (hidden) => this.debugTools.setHidden(hidden),
       advance: (seconds) => {
-        this.intent = this.input.consume();
-        this.player.applyLook(this.intent.lookDX, this.intent.lookDY);
+        this.handleInput(this.input.consume());
         this.fixedStep.runExactly(seconds);
         this.player.interpolate(1);
+        this.flashlight.update(seconds, this.elapsed);
         this.publishDiagnostics();
       },
       look: (dxPx, dyPx) => {
@@ -225,6 +262,7 @@ export class Game {
       },
       teleport: (x, z, yaw) => {
         this.player.teleport(x, z, yaw);
+        this.flashlight.snap();
         this.publishDiagnostics();
       },
       simulateFrame: (deltaSeconds) => {
@@ -247,8 +285,8 @@ export class Game {
         speed: this.player.speed,
         grounded: this.player.grounded,
       },
-      flashlight: { on: false, flickering: false },
-      objective: { powerOn: false },
+      flashlight: { on: this.flashlight.on, flickering: this.flashlight.flickering },
+      objective: { powerOn: this.fuseBox.powerOn },
       haunt: { phase: 'calm', counts: {}, apparitionVisible: false },
       audio: { contextState: 'none', played: {} },
       renderer: {

@@ -91,6 +91,8 @@ body,
 
 .hud-prompt {
   top: 58%;
+  /* Must stay readable over a wall blown out by the flashlight at close range. */
+  background: rgba(0, 0, 0, 0.85);
 }
 
 .hud-help[hidden],

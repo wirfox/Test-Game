@@ -28,12 +28,13 @@ export class PhysicsWorld {
     this.world.step();
   }
 
-  /** Nearest hit along a ray, or null. The direction does not need to be normalized. */
+  /** Nearest hit on fixed level geometry along a ray, or null. The direction does not need to be normalized. */
   castRay(from: Vec3, dir: Vec3, maxDist: number): { distance: number } | null {
     const length = Math.hypot(dir.x, dir.y, dir.z);
     if (length === 0) return null;
     const ray = new RAPIER.Ray(from, { x: dir.x / length, y: dir.y / length, z: dir.z / length });
-    const hit = this.world.castRay(ray, maxDist, true);
+    // Level geometry only: the ray often starts inside the player's own capsule.
+    const hit = this.world.castRay(ray, maxDist, true, RAPIER.QueryFilterFlags.ONLY_FIXED);
     return hit ? { distance: hit.timeOfImpact } : null;
   }
 
