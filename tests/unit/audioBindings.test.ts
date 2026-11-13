@@ -56,8 +56,9 @@ describe('bindAudio', () => {
     expect(calls).toEqual([{ fn: 'duck', args: [SILENCE_DB, 0.2] }]);
   });
 
-  it('hits the sting when the apparition vanishes, then brings the ambience back', () => {
+  it('starts the sting on the lunge, then brings the ambience back once it has vanished', () => {
     const { calls, bus } = setup();
+    bus.emit('haunt:apparitionLunge', { toward: { x: 0, y: 0, z: 0 } });
     bus.emit('haunt:apparitionVanished', {});
     expect(calls).toEqual([
       { fn: 'play', args: ['sting'] },

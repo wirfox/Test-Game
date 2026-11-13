@@ -87,6 +87,11 @@ export class Flashlight {
     this.killedUntil = Math.max(this.killedUntil, this.now + duration);
   }
 
+  /** Keeps effect timers in step with the simulation, even when no frame is rendered. */
+  setTime(elapsed: number): void {
+    this.now = elapsed;
+  }
+
   /** dt is real frame time (for the smooth follow); elapsed is simulated time (for effects). */
   update(dt: number, elapsed: number): void {
     this.now = elapsed;

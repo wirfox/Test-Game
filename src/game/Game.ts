@@ -4,6 +4,10 @@ import { AudioEngine } from '../audio/AudioEngine';
 import { EventBus } from '../core/EventBus';
 import type { GameEvents, Vec3 } from '../core/events';
 import { FIXED_DT, FixedStep } from '../core/FixedStep';
+import { Apparition } from '../haunt/Apparition';
+import { CeilingLamp } from '../haunt/CeilingLamp';
+import { HauntDirector } from '../haunt/HauntDirector';
+import { HauntPresenter } from '../haunt/HauntPresenter';
 import { InputController, type InputIntent } from '../core/InputController';
 import { Loop } from '../core/Loop';
 import { createRenderer, resizeRenderer } from '../core/Renderer';
@@ -49,6 +53,10 @@ export class Game {
   private readonly interaction: Interaction;
   private readonly audio = new AudioEngine();
   private readonly unbindAudio: () => void;
+  private readonly director: HauntDirector;
+  private readonly apparition: Apparition;
+  private readonly lamp: CeilingLamp;
+  private readonly presenter: HauntPresenter;
   private readonly screens: Screens;
   private readonly hud: Hud;
   private readonly debugTools: DebugTools;
@@ -105,6 +113,17 @@ export class Game {
     // Sound variation has its own generator so it can never disturb gameplay randomness.
     this.unbindAudio = bindAudio(this.bus, this.audio, createSeededRandom(99));
 
+    // The director draws from this.rng through a closure so the seed() test hook still applies.
+    this.director = new HauntDirector(ROOM, this.bus, () => this.rng());
+    this.apparition = new Apparition(this.scene);
+    this.lamp = new CeilingLamp(this.scene, { x: 0, y: 2.55, z: 0 });
+    this.presenter = new HauntPresenter(this.bus, {
+      flashlight: this.flashlight,
+      apparition: this.apparition,
+      lamp: this.lamp,
+    });
+    this.bus.on('interact:fuseBox', () => this.director.triggerFinale());
+
     const host = canvas.parentElement ?? document.body;
     this.hud = new Hud(host);
     this.screens = new Screens(host, (state) => void this.onScreenClicked(state));
@@ -137,6 +156,9 @@ export class Game {
     this.input.dispose();
     this.hud.dispose();
     this.debugTools.dispose();
+    this.presenter.dispose();
+    this.apparition.dispose();
+    this.lamp.dispose();
     this.unbindAudio();
     this.audio.dispose();
     this.flashlight.dispose();
@@ -200,7 +222,16 @@ export class Game {
     this.handleInput(intent);
     this.player.interpolate(this.fixedStep.advance(delta));
     this.flashlight.update(delta, this.elapsed);
+    this.presentHaunt(delta);
     this.audio.setListener(this.player.eyePosition, this.player.yaw);
+  }
+
+  /** Haunt visuals for this frame, plus the camera jolt layered on top of the player's view. */
+  private presentHaunt(delta: number): void {
+    this.presenter.update(delta, this.player.eyePosition);
+    const shake = this.presenter.cameraShake();
+    this.camera.rotation.x += shake.pitch;
+    this.camera.rotation.z = shake.roll;
   }
 
   /** Per-frame input: looking, one-shot key presses, and the interaction prompt. */
@@ -231,6 +262,16 @@ export class Game {
     this.elapsed += dt;
     this.player.fixedUpdate(this.intent, dt);
     this.physics.step(dt);
+    this.flashlight.setTime(this.elapsed);
+    this.director.update({
+      dt,
+      player: this.player.eyePosition,
+      yaw: this.player.yaw,
+      pitch: this.player.pitch,
+      flashlightOn: this.flashlight.on,
+      hasLineOfSight: (from, to) => this.hasLineOfSight(from, to),
+    });
+    if (this.director.phase === 'done' && this.state === 'playing') this.setState('ended');
   }
 
   private render(): void {
@@ -247,8 +288,15 @@ export class Game {
           this.elapsed = 0;
           this.player.teleport(ROOM.spawn.position.x, ROOM.spawn.position.z, ROOM.spawn.yaw);
           this.setState(name);
+        } else if (name === 'finale') {
+          // Standing at the fuse box with power just restored.
+          this.setState('playing');
+          this.player.teleport(ROOM.fuseBox.x - 0.75, ROOM.fuseBox.z, 0);
+          this.flashlight.snap();
+          this.fuseBox.interactable.activate();
+          this.director.triggerFinale();
         } else {
-          throw new Error(`Test state not available yet: ${name}`);
+          throw new Error(`Unknown test state: ${name}`);
         }
         this.render();
         this.publishDiagnostics();
@@ -257,15 +305,14 @@ export class Game {
       setPausedForScreenshot: (paused) => {
         this.pausedForScreenshot = paused;
       },
-      setReducedMotion: () => {
-        // Nothing animates on its own yet; the haunt presenter honors this in task 7.
-      },
+      setReducedMotion: (enabled) => this.presenter.setReducedMotion(enabled),
       hideDebugUi: (hidden) => this.debugTools.setHidden(hidden),
       advance: (seconds) => {
         this.handleInput(this.input.consume());
         this.fixedStep.runExactly(seconds);
         this.player.interpolate(1);
         this.flashlight.update(seconds, this.elapsed);
+        this.presentHaunt(seconds);
         this.publishDiagnostics();
       },
       look: (dxPx, dyPx) => {
@@ -299,7 +346,11 @@ export class Game {
       },
       flashlight: { on: this.flashlight.on, flickering: this.flashlight.flickering },
       objective: { powerOn: this.fuseBox.powerOn },
-      haunt: { phase: 'calm', counts: {}, apparitionVisible: false },
+      haunt: {
+        phase: this.director.phase,
+        counts: { ...this.director.counts },
+        apparitionVisible: this.director.apparitionVisible,
+      },
       audio: { contextState: this.audio.contextState, played: { ...this.audio.played } },
       renderer: {
         calls: info.render.calls,

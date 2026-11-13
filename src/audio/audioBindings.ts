@@ -26,10 +26,10 @@ export function bindAudio(bus: EventBus<GameEvents>, audio: AudioPlayer, rng: ()
     bus.on('haunt:flicker', () => audio.play('flickerBuzz')),
     bus.on('haunt:powerSurge', () => audio.play('powerSurge')),
     bus.on('haunt:apparitionShown', () => audio.duckAmbience(SILENCE_DB, 0.2)),
-    bus.on('haunt:apparitionVanished', () => {
-      audio.play('sting');
-      audio.duckAmbience(AMBIENCE_DB, 2);
-    }),
+    // The sting opens with a quarter-second hiss, so starting it on the lunge lands its hit
+    // right as the apparition vanishes.
+    bus.on('haunt:apparitionLunge', () => audio.play('sting')),
+    bus.on('haunt:apparitionVanished', () => audio.duckAmbience(AMBIENCE_DB, 2)),
   ];
   return () => offs.forEach((off) => off());
 }
