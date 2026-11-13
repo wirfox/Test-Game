@@ -69,3 +69,31 @@ body,
 .screen button[hidden] {
   display: none;
 }
+
+.hud-help,
+.hud-prompt {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 0.4rem 0.9rem;
+  font-size: clamp(0.85rem, 1.6vw, 1.05rem);
+  text-align: center;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  user-select: none;
+}
+
+.hud-help {
+  bottom: 6vh;
+  opacity: 0.8;
+}
+
+.hud-prompt {
+  top: 58%;
+}
+
+.hud-help[hidden],
+.hud-prompt[hidden] {
+  display: none;
+}

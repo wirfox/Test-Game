@@ -34,4 +34,6 @@ export interface GameTestHooks {
   advance(seconds: number): void;
   look(dxPx: number, dyPx: number): void;
   teleport(x: number, z: number, yaw: number): void;
+  /** Feeds one real frame of the given length through the normal update path. */
+  simulateFrame(deltaSeconds: number): void;
 }
