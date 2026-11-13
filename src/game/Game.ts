@@ -1,12 +1,13 @@
 import * as THREE from 'three';
+import { EventBus } from '../core/EventBus';
+import type { GameEvents } from '../core/events';
+import { FixedStep } from '../core/FixedStep';
 import { Loop } from '../core/Loop';
 import { createRenderer, resizeRenderer } from '../core/Renderer';
 import { DebugTools, type DebugTuning } from '../systems/DebugTools';
 import { Screens } from '../ui/screens';
 import { createSeededRandom } from '../utils/random';
 import type { GameDiagnostics, GameState, TestState } from './diagnostics';
-
-const SIM_DT = 1 / 60;
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -16,6 +17,8 @@ export class Game {
     (delta) => this.update(delta),
     () => this.render(),
   );
+  readonly bus = new EventBus<GameEvents>();
+  private readonly fixedStep = new FixedStep((dt) => this.simulate(dt));
   private readonly screens: Screens;
   private readonly debugTools: DebugTools;
   private readonly tuning: DebugTuning = { exposure: 1.0, maxDpr: 2 };
@@ -71,18 +74,20 @@ export class Game {
 
   private setState(next: GameState): void {
     if (next === this.state) return;
+    const from = this.state;
     this.state = next;
+    this.bus.emit('game:stateChanged', { from, to: next });
     this.screens.show(next);
   }
 
   private update(delta: number): void {
     this.frame += 1;
     resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
-    if (this.state === 'playing' && !this.pausedForScreenshot) this.simulate(delta);
+    if (this.state === 'playing' && !this.pausedForScreenshot) this.fixedStep.advance(delta);
     this.publishDiagnostics();
   }
 
-  /** One simulation step. Task 2 moves this behind a fixed timestep. */
+  /** One fixed 60 Hz simulation step. */
   private simulate(dt: number): void {
     this.elapsed += dt;
   }
@@ -115,8 +120,7 @@ export class Game {
       },
       hideDebugUi: (hidden) => this.debugTools.setHidden(hidden),
       advance: (seconds) => {
-        const steps = Math.round(seconds / SIM_DT);
-        for (let i = 0; i < steps; i += 1) this.simulate(SIM_DT);
+        this.fixedStep.runExactly(seconds);
         this.publishDiagnostics();
       },
       look: () => {

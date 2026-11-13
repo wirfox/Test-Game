@@ -58,3 +58,12 @@ test('resize keeps aspect', async ({ page }) => {
       .toBeCloseTo(width / height, 2);
   }
 });
+
+test('real-time loop advances simulated time at about wall-clock speed', async ({ page }) => {
+  await startGame(page);
+  const start = await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.elapsed);
+  await page.waitForTimeout(1000);
+  const gained = (await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.elapsed)) - start;
+  expect(gained).toBeGreaterThan(0.7);
+  expect(gained).toBeLessThan(1.3);
+});
